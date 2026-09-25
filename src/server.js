@@ -1,151 +1,177 @@
 import express from 'express';
-import { PrismaClient } from '@prisma/client';
+import cors from 'cors';
+import prisma from './prisma.js';
+import swaggerUi from 'swagger-ui-express';
 
 const app = express();
-const prisma = new PrismaClient();
-
+app.use(cors());
 app.use(express.json());
 
-// Helper para validar URLs
-const isValidUrl = (url) => {
-  try {
-    new URL(url);
-    return true;
-  } catch {
-    return false;
+// ==========================================
+// 1. CONFIGURAÇÃO DA DOCUMENTAÇÃO SWAGGER
+// ==========================================
+const swaggerDocument = {
+  openapi: "3.0.0",
+  info: {
+    title: "DevShowcase API",
+    version: "1.0.0",
+    description: "API robusta para gestão de portfólios e projetos (Etapa Final)."
+  },
+  paths: {
+    "/api/projects": {
+      get: {
+        summary: "Lista projetos com filtro de tecnologia e paginação",
+        parameters: [
+          { name: "page", in: "query", schema: { type: "integer" } },
+          { name: "limit", in: "query", schema: { type: "integer" } },
+          { name: "tech", in: "query", schema: { type: "string" } }
+        ],
+        responses: { "200": { description: "Sucesso" } }
+      }
+    },
+    "/api/projects/{id}/feedbacks": {
+      post: {
+        summary: "Cadastra nota (1 a 5) e comentário, atualizando a média do projeto",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+        responses: { "201": { description: "Feedback criado" }, "400": { description: "Erro de validação" }, "404": { description: "Projeto não encontrado" } }
+      }
+    },
+    "/api/projects/{id}/upvote": {
+      put: {
+        summary: "Incrementa as curtidas (upvotes) do projeto",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+        responses: { "200": { description: "Curtida adicionada" }, "404": { description: "Projeto não encontrado" } }
+      }
+    }
   }
 };
+// Rota para aceder ao Swagger
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 
 // ==========================================
-// 1. ENDPOINTS DE PERFIL (PROFILES)
+// 2. NOVOS ENDPOINTS DA TAREFA FINAL
 // ==========================================
 
-// POST /api/profiles - Cadastro de perfil com validação
-app.post('/api/profiles', async (req, res) => {
-  const { name, email, bio } = req.body;
-
-  if (!name || name.trim() === '' || !email || email.trim() === '') {
-    return res.status(400).json({ error: 'Nome e email são obrigatórios e não podem estar vazios.' });
-  }
-
+// GET /api/projects (Filtro por tecnologia e paginação)
+app.get('/api/projects', async (req, res, next) => {
   try {
-    const profile = await prisma.profile.create({
-      data: { name, email, bio },
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const tech = req.query.tech;
+
+    const skip = (page - 1) * limit;
+
+    const onde = tech ? {
+      technologies: {
+        some: { name: { contains: tech } }
+      }
+    } : {};
+
+    const projects = await prisma.project.findMany({
+      where: onde,
+      skip: skip,
+      take: limit,
+      include: { profile: true, technologies: true, feedbacks: true }
     });
-    return res.status(201).json(profile);
+
+    const total = await prisma.project.count({ where: onde });
+
+    res.json({
+      dados: projects,
+      paginacao: { paginaAtual: page, limite: limit, totalProjetos: total }
+    });
   } catch (error) {
-    return res.status(400).json({ error: 'Erro ao criar perfil. Verifique se o email já está cadastrado.' });
+    next(error);
   }
 });
 
-// GET /api/profiles/:id - Buscar perfil por id
-app.get('/api/profiles/:id', async (req, res) => {
-  const { id } = req.params;
-
+// POST /api/projects/:id/feedbacks (Cadastrar nota e recalcular média)
+app.post('/api/projects/:id/feedbacks', async (req, res, next) => {
   try {
-    const profile = await prisma.profile.findUnique({
-      where: { id: Number(id) },
-      include: { projects: true },
-    });
+    const { id } = req.params;
+    const { rating, comment } = req.body;
 
-    if (!profile) {
-      return res.status(404).json({ error: 'Perfil não encontrado.' });
+    // Validação da nota (400 Bad Request)
+    if (!rating || rating < 1 || rating > 5) {
+      return res.status(400).json({ error: 'A nota (rating) deve ser um número entre 1 e 5.' });
     }
 
-    return res.json(profile);
-  } catch (error) {
-    return res.status(500).json({ error: 'Erro ao buscar perfil.' });
-  }
-});
+    const projetoExistente = await prisma.project.findUnique({ where: { id: parseInt(id) } });
+    if (!projetoExistente) {
+      return res.status(404).json({ error: 'Projeto não encontrado para deixar feedback.' });
+    }
 
-// ==========================================
-// 2. ENDPOINTS DE TECNOLOGIAS (TECHNOLOGIES)
-// ==========================================
-
-// POST /api/technologies - Cadastro de tecnologia com validação
-app.post('/api/technologies', async (req, res) => {
-  const { name } = req.body;
-
-  if (!name || name.trim() === '') {
-    return res.status(400).json({ error: 'O nome da tecnologia é obrigatório.' });
-  }
-
-  try {
-    const technology = await prisma.technology.create({
-      data: { name },
-    });
-    return res.status(201).json(technology);
-  } catch (error) {
-    return res.status(400).json({ error: 'Erro ao criar tecnologia.' });
-  }
-});
-
-// GET /api/technologies - Listagem de todas as tecnologias
-app.get('/api/technologies', async (req, res) => {
-  try {
-    const technologies = await prisma.technology.findMany();
-    return res.json(technologies);
-  } catch (error) {
-    return res.status(500).json({ error: 'Erro ao listar tecnologias.' });
-  }
-});
-
-// ==========================================
-// 3. ENDPOINTS DE PROJETOS (PROJECTS)
-// ==========================================
-
-// POST /api/projects - Cadastro de projeto com validações
-app.post('/api/projects', async (req, res) => {
-  const { title, description, url, profileId, technologyIds } = req.body;
-
-  if (!title || title.trim() === '') {
-    return res.status(400).json({ error: 'O título do projeto é obrigatório.' });
-  }
-
-  if (url && !isValidUrl(url)) {
-    return res.status(400).json({ error: 'A URL informada não é válida.' });
-  }
-
-  if (!profileId) {
-    return res.status(400).json({ error: 'O profileId é obrigatório.' });
-  }
-
-  try {
-    const project = await prisma.project.create({
+    // Criar o feedback
+    await prisma.feedback.create({
       data: {
-        title,
-        description,
-        url,
-        profileId: Number(profileId),
-        technologies: technologyIds ? {
-          connect: technologyIds.map((id) => ({ id: Number(id) }))
-        } : undefined
-      },
-      include: { technologies: true }
+        rating: parseInt(rating),
+        comment: comment || "",
+        projectId: parseInt(id)
+      }
     });
-    return res.status(201).json(project);
+
+    // Recalcular a nota média
+    const todosFeedbacks = await prisma.feedback.findMany({ where: { projectId: parseInt(id) } });
+    const somaNotas = todosFeedbacks.reduce((acc, curr) => acc + curr.rating, 0);
+    const media = somaNotas / todosFeedbacks.length;
+
+    // Atualizar projeto com a média
+    const projetoAtualizado = await prisma.project.update({
+      where: { id: parseInt(id) },
+      data: { averageRating: media }
+    });
+
+    res.status(201).json({ message: 'Feedback registado com sucesso!', projeto: projetoAtualizado });
   } catch (error) {
-    return res.status(400).json({ error: 'Erro ao criar projeto. Verifique se o perfil e tecnologias existem.' });
+    next(error); // Passa para o tratador global
   }
 });
 
-// GET /api/projects - Listagem de projetos
-app.get('/api/projects', async (req, res) => {
+// PUT /api/projects/:id/upvote (Incrementar curtidas)
+app.put('/api/projects/:id/upvote', async (req, res, next) => {
   try {
-    const projects = await prisma.project.findMany({
-      include: {
-        profile: true,
-        technologies: true,
-        feedbacks: true,
-      },
+    const { id } = req.params;
+
+    const projetoExistente = await prisma.project.findUnique({ where: { id: parseInt(id) } });
+    if (!projetoExistente) {
+      return res.status(404).json({ error: 'Projeto não encontrado para curtir.' });
+    }
+
+    const projetoAtualizado = await prisma.project.update({
+      where: { id: parseInt(id) },
+      data: { upvotes: { increment: 1 } }
     });
-    return res.json(projects);
+
+    res.json({ message: 'Upvote adicionado com sucesso!', projeto: projetoAtualizado });
   } catch (error) {
-    return res.status(500).json({ error: 'Erro ao listar projetos.' });
+    next(error);
   }
 });
 
+
+// ==========================================
+// 3. TRATAMENTO GLOBAL DE EXCEÇÕES
+// ==========================================
+
+// Rota não encontrada (404 Not Found)
+app.use((req, res, next) => {
+  res.status(404).json({ error: 'A rota que tentou aceder não existe. Verifique a URL.' });
+});
+
+// Manipulador global de erros (Internal Server Error)
+app.use((err, req, res, next) => {
+  console.error(err);
+  res.status(500).json({ 
+    error: 'Ocorreu um erro interno no servidor.', 
+    detalhes: err.message 
+  });
+});
+
+// ==========================================
+// INICIAR SERVIDOR
+// ==========================================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Servidor rodando na porta ${PORT}`);
+  console.log(`🚀 Servidor a rodar na porta ${PORT}`);
+  console.log(`📄 Documentação interativa disponível em http://localhost:${PORT}/api-docs`);
 });
