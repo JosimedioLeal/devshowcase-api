@@ -1,44 +1,9 @@
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
 }
 
 datasource db {
   provider = "sqlite"
-  url = "file:./dev.db"
-}
-
-model Profile {
-  id       Int       @id @default(autoincrement())
-  name     String
-  email    String    @unique
-  bio      String?
-  projects Project[]
-}
-
-model Technology {
-  id       Int       @id @default(autoincrement())
-  name     String    @unique
-  projects Project[]
-}
-
-model Project {
-  id            Int          @id @default(autoincrement())
-  title         String
-  description   String?
-  url           String?
-  upvotes       Int          @default(0)
-  averageRating Float        @default(0)
-  profileId     Int
-  profile       Profile      @relation(fields: [profileId], references: [id])
-  technologies  Technology[]
-  feedbacks     Feedback[]
-}
-
-model Feedback {
-  id        Int      @id @default(autoincrement())
-  rating    Int
-  comment   String
-  projectId Int
-  project   Project  @relation(fields: [projectId], references: [id])
-  createdAt DateTime @default(now())
+  url      = env("DATABASE_URL")
 }
