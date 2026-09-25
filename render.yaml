@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: devshowcase-api
+    env: node
+    buildCommand: npm install && ./node_modules/.bin/prisma generate
+    startCommand: node src/server.js
